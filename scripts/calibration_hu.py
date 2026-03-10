@@ -69,6 +69,7 @@ def fit_hu_curve(dicom_dir, degree=2, json_path=None):
     # 保存多项式系数到 JSON
     if json_path:
         hu_info = {
+            "Catphan": 600,
             "expected_hu": expected_hu,
             "poly_degree": degree,
             "a2": float(a2),
@@ -110,7 +111,7 @@ def correct_mhd_volume(mhd_path, poly):
     hu_corrected = np.rint(poly(hu))
     corrected_img = sitk.GetImageFromArray(hu_corrected.astype(np.int16))
     corrected_img.CopyInformation(img)
-    correct_mhd_path=mhd_path.replace(".mhd", "_HU_corrected.mhd")
+    correct_mhd_path = mhd_path.replace(".mhd", "_HU_corrected.mhd")
     sitk.WriteImage(corrected_img, correct_mhd_path)
     print(f"Corrected MHD saved: {correct_mhd_path}")
 
@@ -120,14 +121,14 @@ def main():
     parser = argparse.ArgumentParser(description="CBCT HU Calibration Tool (single MHD & JSON)")
     parser.add_argument("--mhd_path", type=str, default=r"E:\cbct\A_output.mhd", help="Input CBCT .mhd file")
     parser.add_argument("--degree", type=int, default=2, help="Polynomial degree for HU calibration")
-    parser.add_argument("--json", type=str, default=r"E:\cbct\hu_calibration.json",
+    parser.add_argument("--json_path", type=str, default=r"E:\cbct\hu_calibration.json",
                         help="Path to JSON for expected HU & coefficients")
     args = parser.parse_args()
 
     dicom_dir = os.path.join(os.path.dirname(args.mhd_path), "temp", get_image_basename(args.mhd_path))
     nii_to_dicom_series(args.mhd_path, dicom_dir, use_random_id=True)
 
-    poly = fit_hu_curve(dicom_dir, degree=args.degree, json_path=args.json)
+    poly = fit_hu_curve(dicom_dir, degree=args.degree, json_path=args.json_path)
 
     # correct_cbct_volume(dicom_dir, poly)
     # correct_mhd_volume(args.mhd_path, poly)

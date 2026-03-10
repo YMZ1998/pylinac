@@ -1,0 +1,7 @@
+conda activate MIR-INSTALL
+cd scripts
+
+pyinstaller --onefile --clean  --name HuCorrection calibration_hu.py
+python copy_exe.py
+
+\dist\HuCorrection.exe
