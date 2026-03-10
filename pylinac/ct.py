@@ -65,20 +65,19 @@ from .core.warnings import capture_warnings
 # fixes the length to represent it as if it were perpendicular to the imaging axis.
 RAMP_ANGLE_RATIO = 0.42
 
-
 # The values in comment are the HU ranges taken from the Catphan manuals
 # The nominal values are approximately the mid point.
 AIR = -1000  # -1046 : -986
-LUNG_7112 = -868  #  -925 : -810
-PMP = -196  #  -220 : -172
-LDPE = -104  #  -121 :  -87
-POLY = -47  #   -65 :  -29
-WATER = 0  #    -7 :    7
-ACRYLIC = 115  #    92 :  137
-BONE_20 = 237  #   211 :  263
-DELRIN = 365  #   344 :  387
-BONE_50 = 725  #   667 :  783
-TEFLON = 1000  #   941 : 1060
+LUNG_7112 = -868  # -925 : -810
+PMP = -196  # -220 : -172
+LDPE = -104  # -121 :  -87
+POLY = -47  # -65 :  -29
+WATER = 0  # -7 :    7
+ACRYLIC = 115  # 92 :  137
+BONE_20 = 237  # 211 :  263
+DELRIN = 365  # 344 :  387
+BONE_50 = 725  # 667 :  783
+TEFLON = 1000  # 941 : 1060
 
 
 class ROIResult(BaseModel):
@@ -621,6 +620,14 @@ class CatPhanModule(Slice):
             f"{name}: {roi.pixel_value}" for name, roi in self.rois.items()
         )
 
+    @property
+    def roi_vals_as_dict(self) -> dict[str, float]:
+        return {name: roi.pixel_value for name, roi in self.rois.items()}
+
+    @property
+    def get_expected_hu_values(self) -> dict[str, float]:
+        return {name: roi["value"] for name, roi in self.roi_settings.items()}
+
 
 class CTP404CP504(CatPhanModule):
     """Class for analysis of the HU linearity, geometry, and slice thickness regions of the CTP404."""
@@ -802,7 +809,7 @@ class CTP404CP504(CatPhanModule):
         boxsize = self.geometry_roi_size_mm / self.mm_per_pixel
         xbounds = (int(self.phan_center.x - boxsize), int(self.phan_center.x + boxsize))
         ybounds = (int(self.phan_center.y - boxsize), int(self.phan_center.y + boxsize))
-        geo_img = self.image[ybounds[0] : ybounds[1], xbounds[0] : xbounds[1]].copy()
+        geo_img = self.image[ybounds[0]: ybounds[1], xbounds[0]: xbounds[1]].copy()
         # clip to the nearest of the two extremes
         # this can arise from direct density scans. In that case the
         # 1 teflon node will not get detected as the edge intensity is much less than the other nodes (unlike normal)
@@ -997,63 +1004,64 @@ class CTP404CP503(CTP404CP504):
 class CTP404CP600(CTP404CP504):
     roi_dist_mm = 58.7
     roi_radius_mm = 5
+    angle_offset_deg = 180
     roi_settings = {
         "Air": {
             "value": AIR,
-            "angle": 90,
+            "angle": 90 + angle_offset_deg,
             "distance": roi_dist_mm,
             "radius": roi_radius_mm,
         },
         "PMP": {
             "value": PMP,
-            "angle": 60,
+            "angle": 60 + angle_offset_deg,
             "distance": roi_dist_mm,
             "radius": roi_radius_mm,
         },
         "LDPE": {
             "value": LDPE,
-            "angle": 0,
+            "angle": 0 + angle_offset_deg,
             "distance": roi_dist_mm,
             "radius": roi_radius_mm,
         },
         "Poly": {
             "value": POLY,
-            "angle": -60,
+            "angle": -60 + angle_offset_deg,
             "distance": roi_dist_mm,
             "radius": roi_radius_mm,
         },
         "Acrylic": {
             "value": ACRYLIC,
-            "angle": -120,
+            "angle": -120 + angle_offset_deg,
             "distance": roi_dist_mm,
             "radius": roi_radius_mm,
         },
         "Delrin": {
             "value": DELRIN,
-            "angle": -180,
+            "angle": -180 + angle_offset_deg,
             "distance": roi_dist_mm,
             "radius": roi_radius_mm,
         },
         "Teflon": {
             "value": TEFLON,
-            "angle": 120,
+            "angle": 120 + angle_offset_deg,
             "distance": roi_dist_mm,
             "radius": roi_radius_mm,
         },
-        "Vial": {
-            "value": WATER,
-            "angle": -90,
-            "distance": roi_dist_mm,
-            "radius": roi_radius_mm
-            - 1,  # the vial sits inside the ROI and needs some clearance
-        },
+        # "Vial": {
+        #     "value": WATER,
+        #     "angle": -90 + angle_offset_deg,
+        #     "distance": roi_dist_mm,
+        #     "radius": roi_radius_mm
+        #               - 1,  # the vial sits inside the ROI and needs some clearance
+        # },
     }
 
     def _setup_rois(self) -> None:
         """For the 600, the top ROI is an optional water vial slot. If the HU is near water we leave it, otherwise we remove it so as not to flag false failures"""
         super()._setup_rois()
-        if self.rois["Vial"].pixel_value < -500:  # closer to air than water
-            self.rois.pop("Vial")
+        # if self.rois["Vial"].pixel_value < -500:  # closer to air than water
+        #     self.rois.pop("Vial")
 
 
 class CTP404CP604(CTP404CP504):
@@ -2577,8 +2585,8 @@ class CatPhanBase(ResultsDataMixin[CatphanResult], QuaacMixin):
     @property
     def catphan_size(self) -> float:
         """The expected size of the phantom in pixels, based on a 20cm wide phantom."""
-        phan_area = np.pi * (self.catphan_radius_mm**2)
-        return phan_area / (self.mm_per_pixel**2)
+        phan_area = np.pi * (self.catphan_radius_mm ** 2)
+        return phan_area / (self.mm_per_pixel ** 2)
 
     def publish_pdf(
         self,
@@ -2858,6 +2866,25 @@ class CatPhanBase(ResultsDataMixin[CatphanResult], QuaacMixin):
             raise ValueError(
                 f"Tried to find the {module_of_interest} or a subclass of it. Did you override `modules` and not pass this module in?"
             )
+
+    def get_hu(self, as_list: bool = False):
+        results = []
+        result = [
+            f" - CBCT/CT {self._model} QA Test - ",
+            " - CTP 404 Results - ",
+            f"HU Linearity tolerance: {self.ctp404.hu_tolerance}",
+            "HU Linearity ROIs:",
+            # wrap so it doesn't fall off the page in PDFs
+            *textwrap.wrap(self.ctp404.roi_vals_as_str, width=100),
+            f"HU Passed?: {self.ctp404.passed_hu}",
+            f"Slice num: {self.ctp404.slice_num + 1}",
+        ]
+        results.append(result)
+        if not as_list:
+            result = "\n".join(itertools.chain(*results))
+        else:
+            result = results
+        return result, self.ctp404.roi_vals_as_dict, self.ctp404.slice_num + 1
 
     def results(self, as_list: bool = False) -> str | list[list[str]]:
         """Return the results of the analysis as a string. Use with print().
@@ -3240,9 +3267,9 @@ class CatPhan600(CatPhanBase):
     catphan_radius_mm = 101
     modules = {
         CTP404CP600: {"offset": 0},
-        CTP486: {"offset": -160},
-        CTP515CP600: {"offset": -110},
-        CTP528CP600: {"offset": -70},
+        # CTP486: {"offset": -160},
+        # CTP515CP600: {"offset": -110},
+        # CTP528CP600: {"offset": -70},
     }
 
     @staticmethod
