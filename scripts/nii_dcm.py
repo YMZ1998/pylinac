@@ -136,7 +136,7 @@ def nii_to_dicom_series(nii_path, out_dir, use_random_id=True):
         #     print("First slice:", filename)
         #     print("FrameOfReferenceUID:", ds.FrameOfReferenceUID)
 
-    print(f"✔ Done! {num_slices} slices saved to: {out_dir}")
+    print(f"Done! {num_slices} slices saved to: {out_dir}")
 
 
 if __name__ == "__main__":

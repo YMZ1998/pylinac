@@ -1,7 +1,12 @@
-conda activate MIR-INSTALL
+conda create --name PYLINAC python=3.9
+conda activate PYLINAC
 cd scripts
 
+python calibration_hu.py
+
 pyinstaller --onefile --clean  --name HuCorrection calibration_hu.py
+pyinstaller --onefile --clean  --name HuCorrection calibration_hu.py --collect-all pylinac
+
 python copy_exe.py
 
 \dist\HuCorrection.exe

@@ -1,13 +1,18 @@
 import argparse
+import datetime
 import json
 import os
+import sys
+import time
 
 import SimpleITK as sitk
 import numpy as np
 import pydicom
 
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+
 from pylinac import CatPhan600
-from scripts.nii_dcm import get_image_basename, nii_to_dicom_series
+from nii_dcm import get_image_basename, nii_to_dicom_series
 
 
 # ---------- 多项式拟合经过第一个点 ----------
@@ -135,4 +140,6 @@ def main():
 
 
 if __name__ == "__main__":
+    start = time.time()
     main()
+    print("\nTotal Time:", str(datetime.timedelta(seconds=int(time.time() - start))))
