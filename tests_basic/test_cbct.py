@@ -6,6 +6,7 @@ import os
 import os.path as osp
 import tempfile
 from unittest import TestCase, skip
+from unittest.mock import patch
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -19,7 +20,15 @@ from pylinac.core.image import (
     LazyZipDicomImageStack,
 )
 from pylinac.core.io import TemporaryZipDirectory
-from pylinac.ct import CTP404CP503, CTP404CP504, CTP528CP503, CTP528CP504, CatphanResult
+from pylinac.ct import (
+    CTP404CP503,
+    CTP404CP504,
+    CTP404CP600,
+    CTP528CP503,
+    CTP528CP504,
+    CatPhanBase,
+    CatphanResult,
+)
 from tests_basic.core.test_utilities import QuaacTestBase, ResultsDataBase
 from tests_basic.utils import (
     CloudFileMixin,
@@ -278,6 +287,27 @@ class Test700Quaac(QuaacTestBase, TestCase):
 
 
 class TestCustomPhantom(TestCase):
+    def test_catphan600_angle_offset_init(self):
+        with patch.object(CatPhanBase, "__init__", return_value=None):
+            with patch.object(CatPhanBase, "_add_warnings", return_value=None):
+                ct = CatPhan600("fake/path", angle_offset_deg=15)
+
+        self.assertEqual(ct.ctp404_angle_offset_deg, 15)
+
+    def test_catphan600_angle_offset_from_zip(self):
+        with patch.object(CatPhanBase, "__init__", return_value=None):
+            with patch.object(CatPhanBase, "_add_warnings", return_value=None):
+                ct = CatPhan600.from_zip("fake.zip", angle_offset_deg=15)
+
+        self.assertEqual(ct.ctp404_angle_offset_deg, 15)
+
+    def test_ctp404cp600_angle_offset_roi_settings(self):
+        roi_settings = CTP404CP600._roi_settings_with_angle_offset(15)
+
+        self.assertEqual(roi_settings["Air"]["angle"], 105)
+        self.assertEqual(roi_settings["PMP"]["angle"], 75)
+        self.assertEqual(CTP404CP600.roi_settings["Air"]["angle"], 90)
+
     def test_removing_module(self):
         class CatPhan504Modified(CatPhan504):
             modules = {

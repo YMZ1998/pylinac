@@ -4,10 +4,13 @@ from pylinac import CatPhan600
 from scripts.nii_dcm import nii_to_dicom_series, get_image_basename
 
 if __name__ == "__main__":
-    nii_path = r"D:\Data\cbct\A_output.mhd"
+    # nii_path = r"D:\Data\cbct\A_output.mhd"
+    nii_path = r"E:\cbct\A_output.mhd"
+    # nii_path = r"E:\cbct\A_output_HU_corrected.mhd"
+
     out_dir = os.path.join(os.path.dirname(nii_path), "temp", get_image_basename(nii_path))
     nii_to_dicom_series(nii_path, out_dir, use_random_id=True)
-    cbct = CatPhan600(out_dir)
+    cbct = CatPhan600(out_dir, angle_offset_deg=0)
     cbct.analyze()
     # print(cbct.results())
     results, measured_hu, slice_num = cbct.get_hu()

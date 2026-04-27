@@ -30,9 +30,9 @@ def polyfit_through_first_point(x, y, degree):
 
 
 # ---------- HU 拟合 ----------
-def fit_hu_curve(dicom_dir, degree=2, json_path=None):
+def fit_hu_curve(dicom_dir, degree=2, json_path=None, angle_offset_deg=0):
     print("Analyzing CatPhan HU inserts...")
-    cbct = CatPhan600(dicom_dir)
+    cbct = CatPhan600(dicom_dir, angle_offset_deg=angle_offset_deg)
     cbct.analyze()
     results, rois_hu, slice_num = cbct.get_hu()
     print(results)
@@ -128,12 +128,19 @@ def main():
     parser.add_argument("--degree", type=int, default=2, help="Polynomial degree for HU calibration")
     parser.add_argument("--json_path", type=str, default=r"E:\cbct\hu_calibration.json",
                         help="Path to JSON for expected HU & coefficients")
+    parser.add_argument("--angle_offset_deg", type=float, default=0,
+                        help="Angle offset in degrees for CatPhan600 CTP404 HU ROIs")
     args = parser.parse_args()
 
     dicom_dir = os.path.join(os.path.dirname(args.mhd_path), "temp", get_image_basename(args.mhd_path))
     nii_to_dicom_series(args.mhd_path, dicom_dir, use_random_id=True)
 
-    poly = fit_hu_curve(dicom_dir, degree=args.degree, json_path=args.json_path)
+    poly = fit_hu_curve(
+        dicom_dir,
+        degree=args.degree,
+        json_path=args.json_path,
+        angle_offset_deg=args.angle_offset_deg,
+    )
 
     # correct_cbct_volume(dicom_dir, poly)
     # correct_mhd_volume(args.mhd_path, poly)

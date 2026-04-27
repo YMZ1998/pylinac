@@ -1004,53 +1004,52 @@ class CTP404CP503(CTP404CP504):
 class CTP404CP600(CTP404CP504):
     roi_dist_mm = 58.7
     roi_radius_mm = 5
-    angle_offset_deg = 180
     roi_settings = {
         "Air": {
             "value": AIR,
-            "angle": 90 + angle_offset_deg,
+            "angle": 90,
             "distance": roi_dist_mm,
             "radius": roi_radius_mm,
         },
         "PMP": {
             "value": PMP,
-            "angle": 60 + angle_offset_deg,
+            "angle": 60,
             "distance": roi_dist_mm,
             "radius": roi_radius_mm,
         },
         "LDPE": {
             "value": LDPE,
-            "angle": 0 + angle_offset_deg,
+            "angle": 0,
             "distance": roi_dist_mm,
             "radius": roi_radius_mm,
         },
         "Poly": {
             "value": POLY,
-            "angle": -60 + angle_offset_deg,
+            "angle": -60,
             "distance": roi_dist_mm,
             "radius": roi_radius_mm,
         },
         "Acrylic": {
             "value": ACRYLIC,
-            "angle": -120 + angle_offset_deg,
+            "angle": -120,
             "distance": roi_dist_mm,
             "radius": roi_radius_mm,
         },
         "Delrin": {
             "value": DELRIN,
-            "angle": -180 + angle_offset_deg,
+            "angle": -180,
             "distance": roi_dist_mm,
             "radius": roi_radius_mm,
         },
         "Teflon": {
             "value": TEFLON,
-            "angle": 120 + angle_offset_deg,
+            "angle": 120,
             "distance": roi_dist_mm,
             "radius": roi_radius_mm,
         },
         # "Vial": {
         #     "value": WATER,
-        #     "angle": -90 + angle_offset_deg,
+        #     "angle": -90,
         #     "distance": roi_dist_mm,
         #     "radius": roi_radius_mm
         #               - 1,  # the vial sits inside the ROI and needs some clearance
@@ -1062,6 +1061,31 @@ class CTP404CP600(CTP404CP504):
         super()._setup_rois()
         # if self.rois["Vial"].pixel_value < -500:  # closer to air than water
         #     self.rois.pop("Vial")
+
+    @classmethod
+    def _roi_settings_with_angle_offset(
+        cls, angle_offset_deg: int | float
+    ) -> dict[str, dict[str, int | float]]:
+        roi_settings = {
+            name: settings.copy() for name, settings in cls.roi_settings.items()
+        }
+        for settings in roi_settings.values():
+            settings["angle"] += angle_offset_deg
+        return roi_settings
+
+    def __init__(
+        self,
+        *args,
+        angle_offset_deg: int | float | None = None,
+        **kwargs,
+    ):
+        self.angle_offset_deg = (
+            self.angle_offset_deg if angle_offset_deg is None else angle_offset_deg
+        )
+        self.roi_settings = self._roi_settings_with_angle_offset(
+            self.angle_offset_deg
+        )
+        super().__init__(*args, **kwargs)
 
 
 class CTP404CP604(CTP404CP504):
@@ -2102,13 +2126,13 @@ class CatPhanBase(ResultsDataMixin[CatphanResult], QuaacMixin):
             )
 
     @classmethod
-    def from_demo_images(cls):
+    def from_demo_images(cls, **kwargs):
         """Construct a CBCT object from the demo images."""
         demo_file = retrieve_demo_file(name=cls._demo_url)
-        return cls.from_zip(demo_file)
+        return cls.from_zip(demo_file, **kwargs)
 
     @classmethod
-    def from_url(cls, url: str, check_uid: bool = True):
+    def from_url(cls, url: str, check_uid: bool = True, **kwargs):
         """Instantiate a CBCT object from a URL pointing to a .zip object.
 
         Parameters
@@ -2119,7 +2143,7 @@ class CatPhanBase(ResultsDataMixin[CatphanResult], QuaacMixin):
             Whether to enforce raising an error if more than one UID is found in the dataset.
         """
         filename = get_url(url)
-        return cls.from_zip(filename, check_uid=check_uid)
+        return cls.from_zip(filename, check_uid=check_uid, **kwargs)
 
     @classmethod
     def from_zip(
@@ -2127,6 +2151,7 @@ class CatPhanBase(ResultsDataMixin[CatphanResult], QuaacMixin):
         zip_file: str | zipfile.ZipFile | BinaryIO,
         check_uid: bool = True,
         memory_efficient_mode: bool = False,
+        **kwargs,
     ):
         """Construct a CBCT object and pass the zip file.
 
@@ -2150,6 +2175,7 @@ class CatPhanBase(ResultsDataMixin[CatphanResult], QuaacMixin):
             check_uid=check_uid,
             memory_efficient_mode=memory_efficient_mode,
             is_zip=True,
+            **kwargs,
         )
 
     def plotly_analyzed_images(
@@ -2813,6 +2839,11 @@ class CatPhanBase(ResultsDataMixin[CatphanResult], QuaacMixin):
         self.roll_slice_offset = roll_slice_offset
         self.localize(origin_slice)
         ctp404, offset = self._get_module(CTP404CP504, raise_empty=True)
+        ctp404_kwargs = {}
+        if issubclass(ctp404, CTP404CP600):
+            ctp404_kwargs["angle_offset_deg"] = getattr(
+                self, "ctp404_angle_offset_deg", 0
+            )
         self.ctp404 = ctp404(
             self,
             offset=offset,
@@ -2822,6 +2853,7 @@ class CatPhanBase(ResultsDataMixin[CatphanResult], QuaacMixin):
             clear_borders=self.clear_borders,
             thickness_slice_straddle=thickness_slice_straddle,
             expected_hu_values=expected_hu_values,
+            **ctp404_kwargs,
         )
         if self._has_module(CTP486):
             ctp486, offset = self._get_module(CTP486)
@@ -3271,6 +3303,22 @@ class CatPhan600(CatPhanBase):
         # CTP515CP600: {"offset": -110},
         # CTP528CP600: {"offset": -70},
     }
+
+    def __init__(
+        self,
+        folderpath: str | Sequence[str] | Path | Sequence[Path] | Sequence[BytesIO],
+        check_uid: bool = True,
+        memory_efficient_mode: bool = False,
+        is_zip: bool = False,
+        angle_offset_deg: int | float = 0,
+    ):
+        self.ctp404_angle_offset_deg = angle_offset_deg
+        super().__init__(
+            folderpath=folderpath,
+            check_uid=check_uid,
+            memory_efficient_mode=memory_efficient_mode,
+            is_zip=is_zip,
+        )
 
     @staticmethod
     def run_demo(show: bool = True):
