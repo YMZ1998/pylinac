@@ -15,6 +15,53 @@ from pylinac import CatPhan600
 from nii_dcm import get_image_basename, nii_to_dicom_series
 
 
+def image_input_mtime(image_path):
+    mtimes = [os.path.getmtime(image_path)]
+    if image_path.lower().endswith(".mhd"):
+        with open(image_path, "r") as f:
+            for line in f:
+                if line.strip().startswith("ElementDataFile"):
+                    data_file = line.split("=", 1)[1].strip()
+                    if data_file and data_file.upper() not in {"LOCAL", "LIST"}:
+                        data_path = os.path.join(os.path.dirname(image_path), data_file)
+                        if os.path.exists(data_path):
+                            mtimes.append(os.path.getmtime(data_path))
+                    break
+    return max(mtimes)
+
+
+def dicom_series_is_current(image_path, dicom_dir):
+    if not os.path.isdir(dicom_dir):
+        return False
+    dcm_files = [
+        entry
+        for entry in os.scandir(dicom_dir)
+        if entry.is_file() and entry.name.lower().endswith(".dcm")
+    ]
+    if not dcm_files:
+        return False
+    return min(entry.stat().st_mtime for entry in dcm_files) >= image_input_mtime(
+        image_path
+    )
+
+
+def prepare_dicom_series(image_path, dicom_dir, force=False):
+    if not force and dicom_series_is_current(image_path, dicom_dir):
+        print(f"Reusing existing DICOM series: {dicom_dir}")
+        return
+    nii_to_dicom_series(image_path, dicom_dir, use_random_id=True)
+
+
+def apply_poly(poly, values):
+    coeffs = np.asarray(poly.coeffs, dtype=np.float32)
+    result = np.empty_like(values, dtype=np.float32)
+    result.fill(coeffs[0])
+    for coeff in coeffs[1:]:
+        result *= values
+        result += coeff
+    return result
+
+
 # ---------- 多项式拟合经过第一个点 ----------
 def polyfit_through_first_point(x, y, degree):
     x, y = np.asarray(x), np.asarray(y)
@@ -49,9 +96,9 @@ def fit_hu_curve(dicom_dir, degree=2, json_path=None, angle_offset_deg=0):
             expected_hu = json.load(f)["expected_hu"]
         print(f"Loaded expected HU from {json_path}")
     else:
-        expected_hu = {'Air': -1000.0, 'PMP': -200.0, 'LDPE': -104.0, 'Delrin': 365.0, 'Teflon': 990.0}
-        # expected_hu = {'Air': -1000.0, 'PMP': -200.0, 'LDPE': -100.0, 'Poly': -35.0, 'Acrylic': 120.0, 'Delrin': 340.0,
-        #            'Teflon': 990.0}
+        # expected_hu = {'Air': -1000.0, 'PMP': -200.0, 'LDPE': -104.0, 'Delrin': 365.0, 'Teflon': 990.0}
+        expected_hu = {'Air': -1000.0, 'PMP': -200.0, 'LDPE': -100.0, 'Poly': -35.0, 'Acrylic': 120.0, 'Delrin': 340.0,
+                   'Teflon': 990.0}
         print("Using default expected HU")
     print("Expected HU: ", expected_hu)
     print("Measured HU: ", measured_hu)
@@ -93,19 +140,23 @@ def fit_hu_curve(dicom_dir, degree=2, json_path=None, angle_offset_deg=0):
 # ---------- DICOM 校正 ----------
 def correct_cbct_volume(dicom_dir, poly):
     print("\nApplying HU correction to DICOMs...")
-    files = sorted(os.listdir(dicom_dir))
+    files = sorted(f for f in os.listdir(dicom_dir) if f.lower().endswith(".dcm"))
     for f in files:
-        if not f.endswith(".dcm"):
-            continue
         path = os.path.join(dicom_dir, f)
         ds = pydicom.dcmread(path)
-        pixel = ds.pixel_array.astype(np.float32)
+        pixel = ds.pixel_array
+        original_dtype = pixel.dtype
+        hu = pixel.astype(np.float32, copy=False)
         slope, intercept = float(ds.RescaleSlope), float(ds.RescaleIntercept)
-        hu = pixel * slope + intercept
-        hu_corrected = np.rint(poly(hu))
-        pixel_corrected = (hu_corrected - intercept) / slope
-        pixel_corrected = np.clip(pixel_corrected, -32768, 32767)
-        pixel_corrected = pixel_corrected.astype(ds.pixel_array.dtype)
+        if slope != 1 or intercept != 0:
+            hu = hu * slope + intercept
+        pixel_corrected = apply_poly(poly, hu)
+        np.rint(pixel_corrected, out=pixel_corrected)
+        if slope != 1 or intercept != 0:
+            pixel_corrected -= intercept
+            pixel_corrected /= slope
+        np.clip(pixel_corrected, -32768, 32767, out=pixel_corrected)
+        pixel_corrected = pixel_corrected.astype(original_dtype)
         ds.PixelData = pixel_corrected.tobytes()
         ds.save_as(path)  # 直接覆盖
 
@@ -114,8 +165,9 @@ def correct_cbct_volume(dicom_dir, poly):
 def correct_mhd_volume(mhd_path, poly):
     print(f"\nReading MHD volume: {mhd_path}")
     img = sitk.ReadImage(mhd_path)
-    hu = sitk.GetArrayFromImage(img).astype(np.float32)
-    hu_corrected = np.rint(poly(hu))
+    hu = sitk.GetArrayFromImage(img).astype(np.float32, copy=False)
+    hu_corrected = apply_poly(poly, hu)
+    np.rint(hu_corrected, out=hu_corrected)
     corrected_img = sitk.GetImageFromArray(hu_corrected.astype(np.int16))
     corrected_img.CopyInformation(img)
     correct_mhd_path = mhd_path.replace(".mhd", "_HU_corrected.mhd")
@@ -132,10 +184,16 @@ def main():
                         help="Path to JSON for expected HU & coefficients")
     parser.add_argument("--angle_offset_deg", type=float, default=0,
                         help="Angle offset in degrees for CatPhan600 CTP404 HU ROIs")
+    parser.add_argument("--force_dicom_conversion", action="store_true",
+                        help="Always regenerate temporary DICOM files instead of reusing current files")
     args = parser.parse_args()
 
     dicom_dir = os.path.join(os.path.dirname(args.mhd_path), "temp", get_image_basename(args.mhd_path))
-    nii_to_dicom_series(args.mhd_path, dicom_dir, use_random_id=True)
+    prepare_dicom_series(
+        args.mhd_path,
+        dicom_dir,
+        force=args.force_dicom_conversion,
+    )
 
     poly = fit_hu_curve(
         dicom_dir,

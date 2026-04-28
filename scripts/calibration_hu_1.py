@@ -5,8 +5,8 @@ from scripts.nii_dcm import nii_to_dicom_series, get_image_basename
 
 if __name__ == "__main__":
     # nii_path = r"D:\Data\cbct\A_output.mhd"
-    nii_path = r"E:\cbct\A_output.mhd"
-    # nii_path = r"E:\cbct\A_output_HU_corrected.mhd"
+    # nii_path = r"E:\cbct\A_output.mhd"
+    nii_path = r"E:\cbct\A_output_HU_corrected.mhd"
 
     out_dir = os.path.join(os.path.dirname(nii_path), "temp", get_image_basename(nii_path))
     nii_to_dicom_series(nii_path, out_dir, use_random_id=True)
@@ -19,7 +19,8 @@ if __name__ == "__main__":
 
     # expected_hu = {'Air': -1000.0, 'PMP': -200.0, 'LDPE': -100.0, 'Poly': -35.0, 'Acrylic': 120.0, 'Delrin': 340.0,
     #            'Teflon': 990.0}
-    expected_hu = {'Air': -1000.0, 'LDPE': -104.0, 'Delrin': 365.0, 'Teflon': 990.0}
+    expected_hu = {'Air': -1000.0, 'PMP': -200.0, 'LDPE': -104.0, 'Poly': -35.0, 'Acrylic': 120.0, 'Delrin': 365.0,
+                   'Teflon': 990.0}
 
     print("\nHU measurement:")
 
