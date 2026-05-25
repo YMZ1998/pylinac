@@ -15,6 +15,17 @@ from pylinac import CatPhan600
 from nii_dcm import get_image_basename, nii_to_dicom_series
 
 
+DEFAULT_EXPECTED_HU = {
+    "Air": -1000.0,
+    "PMP": -196.0,
+    "LDPE": -104.0,
+    "Poly": -47.0,
+    "Acrylic": 115.0,
+    "Delrin": 365.0,
+    "Teflon": 1000.0,
+}
+
+
 def image_input_mtime(image_path):
     mtimes = [os.path.getmtime(image_path)]
     if image_path.lower().endswith(".mhd"):
@@ -62,6 +73,40 @@ def apply_poly(poly, values):
     return result
 
 
+def apply_piecewise_linear(measured_points, expected_points, values):
+    measured_points = np.asarray(measured_points, dtype=np.float32)
+    expected_points = np.asarray(expected_points, dtype=np.float32)
+    order = np.argsort(measured_points)
+    measured_points = measured_points[order]
+    expected_points = expected_points[order]
+
+    result = np.interp(values, measured_points, expected_points).astype(np.float32)
+    left = values < measured_points[0]
+    right = values > measured_points[-1]
+
+    if np.any(left):
+        slope = (expected_points[1] - expected_points[0]) / (
+            measured_points[1] - measured_points[0]
+        )
+        result[left] = expected_points[0] + (values[left] - measured_points[0]) * slope
+    if np.any(right):
+        slope = (expected_points[-1] - expected_points[-2]) / (
+            measured_points[-1] - measured_points[-2]
+        )
+        result[right] = expected_points[-1] + (
+            values[right] - measured_points[-1]
+        ) * slope
+    return result
+
+
+def apply_calibration(calibration, values):
+    if calibration["method"] == "piecewise":
+        return apply_piecewise_linear(
+            calibration["measured"], calibration["expected"], values
+        )
+    return apply_poly(calibration["poly"], values)
+
+
 # ---------- 多项式拟合经过第一个点 ----------
 def polyfit_through_first_point(x, y, degree):
     x, y = np.asarray(x), np.asarray(y)
@@ -77,7 +122,60 @@ def polyfit_through_first_point(x, y, degree):
 
 
 # ---------- HU 拟合 ----------
-def fit_hu_curve(dicom_dir, degree=2, json_path=None, angle_offset_deg=0):
+def build_calibration(measured, expected, method="piecewise", degree=2):
+    measured = np.asarray(measured, dtype=np.float32)
+    expected = np.asarray(expected, dtype=np.float32)
+    if len(measured) < 2:
+        raise ValueError("At least 2 HU calibration points are required")
+
+    if method == "piecewise":
+        fitted = apply_piecewise_linear(measured, expected, measured)
+        calibration = {
+            "method": method,
+            "measured": measured,
+            "expected": expected,
+            "poly": None,
+            "coefficients": [],
+        }
+    elif method == "poly":
+        fit_degree = min(degree, len(measured) - 1)
+        poly = np.poly1d(np.polyfit(measured, expected, fit_degree))
+        fitted = poly(measured)
+        calibration = {
+            "method": method,
+            "measured": measured,
+            "expected": expected,
+            "poly": poly,
+            "coefficients": [float(c) for c in poly.coeffs],
+        }
+    elif method == "poly_anchor":
+        fit_degree = min(degree, len(measured) - 1)
+        poly, _, _, _ = polyfit_through_first_point(measured, expected, fit_degree)
+        fitted = poly(measured)
+        calibration = {
+            "method": method,
+            "measured": measured,
+            "expected": expected,
+            "poly": poly,
+            "coefficients": [float(c) for c in poly.coeffs],
+        }
+    else:
+        raise ValueError(f"Unknown fit method: {method}")
+
+    errors = fitted - expected
+    calibration["errors"] = errors
+    calibration["max_abs_error"] = float(np.max(np.abs(errors)))
+    calibration["mean_abs_error"] = float(np.mean(np.abs(errors)))
+    return calibration
+
+
+def fit_hu_curve(
+    dicom_dir,
+    degree=2,
+    json_path=None,
+    angle_offset_deg=0,
+    fit_method="piecewise",
+):
     print("Analyzing CatPhan HU inserts...")
     cbct = CatPhan600(dicom_dir, angle_offset_deg=angle_offset_deg)
     cbct.analyze()
@@ -96,45 +194,63 @@ def fit_hu_curve(dicom_dir, degree=2, json_path=None, angle_offset_deg=0):
             expected_hu = json.load(f)["expected_hu"]
         print(f"Loaded expected HU from {json_path}")
     else:
-        # expected_hu = {'Air': -1000.0, 'PMP': -200.0, 'LDPE': -104.0, 'Delrin': 365.0, 'Teflon': 990.0}
-        expected_hu = {'Air': -1000.0, 'PMP': -200.0, 'LDPE': -100.0, 'Poly': -35.0, 'Acrylic': 120.0, 'Delrin': 340.0,
-                   'Teflon': 990.0}
+        expected_hu = DEFAULT_EXPECTED_HU
         print("Using default expected HU")
     print("Expected HU: ", expected_hu)
     print("Measured HU: ", measured_hu)
-    measured = [measured_hu[name] for name in expected_hu]
-    expected = [expected_hu[name] for name in expected_hu]
+    roi_names = [name for name in expected_hu if name in measured_hu]
+    measured = [measured_hu[name] for name in roi_names]
+    expected = [expected_hu[name] for name in roi_names]
 
-    poly, coeffs, x0, y0 = polyfit_through_first_point(measured, expected, degree)
-    print("First point check:", poly(measured[0]), expected[0])
-    print("HU calibration polynomial: ", poly)
-
-    c1 = coeffs[0]
-    c2 = coeffs[1]
-
-    a2 = c2
-    a1 = c1 - 2 * c2 * x0
-    a0 = y0 - c1 * x0 + c2 * x0 * x0
-
-    print("a2 =", a2)
-    print("a1 =", a1)
-    print("a0 =", a0)
+    calibration = build_calibration(
+        measured, expected, method=fit_method, degree=degree
+    )
+    print(f"HU calibration method: {fit_method}")
+    if calibration["poly"] is not None:
+        print("HU calibration polynomial: ", calibration["poly"])
+    print("Calibration residuals:")
+    for name, measured_value, expected_value, error in zip(
+        roi_names, measured, expected, calibration["errors"]
+    ):
+        print(
+            f"{name:10s} measured={measured_value:8.2f} "
+            f"expected={expected_value:8.2f} residual={error:8.2f}"
+        )
+    print("Max abs residual:", calibration["max_abs_error"])
+    print("Mean abs residual:", calibration["mean_abs_error"])
 
     # 保存多项式系数到 JSON
     if json_path:
         hu_info = {
             "Catphan": 600,
             "expected_hu": expected_hu,
+            "measured_hu": {name: float(measured_hu[name]) for name in roi_names},
+            "fit_method": fit_method,
             "poly_degree": degree,
-            "a2": float(a2),
-            "a1": float(a1),
-            "a0": float(a0)
+            "coefficients": calibration["coefficients"],
+            "points": [
+                {
+                    "name": name,
+                    "measured": float(measured_value),
+                    "expected": float(expected_value),
+                    "residual": float(error),
+                }
+                for name, measured_value, expected_value, error in zip(
+                    roi_names, measured, expected, calibration["errors"]
+                )
+            ],
+            "max_abs_error": calibration["max_abs_error"],
+            "mean_abs_error": calibration["mean_abs_error"],
         }
+        if len(calibration["coefficients"]) == 3:
+            hu_info["a2"] = calibration["coefficients"][0]
+            hu_info["a1"] = calibration["coefficients"][1]
+            hu_info["a0"] = calibration["coefficients"][2]
         with open(json_path, "w") as f:
             json.dump(hu_info, f, indent=2)
         print(f"Saved HU polynomial coefficients to {json_path}")
 
-    return poly
+    return calibration
 
 
 # ---------- DICOM 校正 ----------
